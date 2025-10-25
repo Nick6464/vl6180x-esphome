@@ -110,28 +110,52 @@ void VL6180XSensor::update() {
     return;
   }
   
-  // Start single-shot range measurement
-  this->write_reg(0x0018, 0x01);
+  uint32_t sum = 0;
+  uint8_t valid_samples = 0;
   
-  // Poll interrupt status register for range ready
-  uint8_t status = 0;
-  for (int i = 0; i < 100; i++) {
-    if (this->read_reg(0x004F, &status) && (status & 0x04)) {
-      // Range measurement ready
-      uint8_t range;
-      if (this->read_reg(0x0062, &range)) {
-        // Clear interrupt
-        this->write_reg(0x0015, 0x07);
-        
-        ESP_LOGD(TAG, "Distance: %d mm", range);
-        this->publish_state(range);
-        return;
+  // Take multiple samples and average them
+  for (uint8_t sample = 0; sample < samples_; sample++) {
+    // Start single-shot range measurement
+    this->write_reg(0x0018, 0x01);
+    
+    // Poll interrupt status register for range ready
+    uint8_t status = 0;
+    bool measurement_ready = false;
+    
+    for (int i = 0; i < 100; i++) {
+      if (this->read_reg(0x004F, &status) && (status & 0x04)) {
+        // Range measurement ready
+        uint8_t range;
+        if (this->read_reg(0x0062, &range)) {
+          // Clear interrupt
+          this->write_reg(0x0015, 0x07);
+          
+          sum += range;
+          valid_samples++;
+          measurement_ready = true;
+          break;
+        }
       }
+      delay(2);
     }
-    delay(2);
+    
+    if (!measurement_ready) {
+      ESP_LOGW(TAG, "Sample %d measurement timeout (status: 0x%02X)", sample + 1, status);
+    }
+    
+    // Small delay between samples
+    if (sample < samples_ - 1) {
+      delay(10);
+    }
   }
   
-  ESP_LOGW(TAG, "Measurement timeout (status: 0x%02X)", status);
+  if (valid_samples > 0) {
+    float average = (float)sum / valid_samples;
+    ESP_LOGD(TAG, "Distance: %.1f mm (averaged from %d/%d samples)", average, valid_samples, samples_);
+    this->publish_state(average);
+  } else {
+    ESP_LOGW(TAG, "No valid measurements obtained");
+  }
 }
 
 void VL6180XSensor::dump_config() {
@@ -139,6 +163,7 @@ void VL6180XSensor::dump_config() {
   LOG_I2C_DEVICE(this);
   LOG_UPDATE_INTERVAL(this);
   LOG_SENSOR("  ", "Distance", this);
+  ESP_LOGCONFIG(TAG, "  Samples: %d", samples_);
   if (this->is_failed()) {
     ESP_LOGE(TAG, "Communication with VL6180X failed!");
   }

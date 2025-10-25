@@ -46,9 +46,10 @@ sensor:
     name: "Distance"           # Required
     update_interval: 2s        # Optional, default 60s
     address: 0x29              # Optional, default 0x29
+    samples: 5                 # Optional, default 1 (range: 1-20)
 ```
 
-All standard ESPHome sensor options are supported.
+The `samples` parameter specifies how many readings to average per update to reduce noise. All standard ESPHome sensor options are supported.
 
 ## Example
 
@@ -57,9 +58,7 @@ sensor:
   - platform: vl6180x
     name: "Water Level"
     update_interval: 1s
-    filters:
-      - sliding_window_moving_average:
-          window_size: 5
+    samples: 5  # Hardware averaging to reduce noise
 ```
 
 ## Technical Details

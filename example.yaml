@@ -38,14 +38,11 @@ sensor:
     name: "ToF Distance"
     id: tof_distance
     update_interval: 2s
-    filters:
-      - sliding_window_moving_average:
-          window_size: 5
-          send_every: 1
+    samples: 5  # Take 5 readings and average them to reduce noise
     on_value:
       then:
         - logger.log:
-            format: "Distance: %.0f mm"
+            format: "Distance: %.1f mm"
             args: ['x']
 
 # Example: Convert to water level percentage
