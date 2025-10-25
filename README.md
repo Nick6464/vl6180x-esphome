@@ -7,6 +7,7 @@ ESPHome custom component for the VL6180X time-of-flight distance sensor.
 - Accurate distance measurements: 5-200mm range
 - I2C interface with automatic initialization
 - Works in ambient light conditions
+- Three-stage noise reduction and debouncing
 - Easy Home Assistant integration
 
 ## Installation
@@ -47,9 +48,19 @@ sensor:
     update_interval: 2s        # Optional, default 60s
     address: 0x29              # Optional, default 0x29
     samples: 5                 # Optional, default 1 (range: 1-20)
+    filter_window: 5           # Optional, default 5 (range: 1-20)
+    delta_threshold: 2.0       # Optional, default 0.0 mm (range: 0-50)
 ```
 
-The `samples` parameter specifies how many readings to average per update to reduce noise. All standard ESPHome sensor options are supported.
+### Noise Reduction Parameters
+
+**`samples`**: Number of hardware readings to average per update. Higher values increase measurement time but reduce noise.
+
+**`filter_window`**: Moving average window size. Smooths readings across multiple updates. Larger values provide smoother transitions but slower response to real changes.
+
+**`delta_threshold`**: Minimum change in mm required to publish an update. Prevents publishing small fluctuations. Set to 0 to disable.
+
+All standard ESPHome sensor options are supported.
 
 ## Example
 
@@ -57,16 +68,20 @@ The `samples` parameter specifies how many readings to average per update to red
 sensor:
   - platform: vl6180x
     name: "Water Level"
-    update_interval: 1s
-    samples: 5  # Hardware averaging to reduce noise
+    update_interval: 2s
+    samples: 5           # Average 5 hardware readings per update
+    filter_window: 5     # Moving average over 5 updates
+    delta_threshold: 2.0 # Only publish if change >= 2mm
 ```
 
 ## Technical Details
 
 - Range: 0-200mm (optimal 5-200mm)
-- Interface: I2C (400kHz)
+- Interface: I2C (100-400kHz recommended)
 - Output: Millimeters
 - Implements ST AN4545 initialization sequence
+- Hardware error status validation per datasheet
+- Three-stage debouncing: hardware averaging, moving average filter, delta threshold
 
 ## License
 

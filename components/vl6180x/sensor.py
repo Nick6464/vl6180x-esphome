@@ -2,13 +2,16 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import i2c, sensor
 from esphome.const import (
-    CONF_SAMPLES,
     DEVICE_CLASS_DISTANCE,
     STATE_CLASS_MEASUREMENT,
     UNIT_MILLIMETER,
 )
 
 DEPENDENCIES = ["i2c"]
+
+CONF_SAMPLES = "samples"
+CONF_FILTER_WINDOW = "filter_window"
+CONF_DELTA_THRESHOLD = "delta_threshold"
 
 vl6180x_ns = cg.esphome_ns.namespace("vl6180x")
 VL6180XSensor = vl6180x_ns.class_(
@@ -27,6 +30,10 @@ CONFIG_SCHEMA = (
         {
             cv.GenerateID(): cv.declare_id(VL6180XSensor),
             cv.Optional(CONF_SAMPLES, default=1): cv.int_range(min=1, max=20),
+            cv.Optional(CONF_FILTER_WINDOW, default=5): cv.int_range(min=1, max=20),
+            cv.Optional(CONF_DELTA_THRESHOLD, default=0.0): cv.float_range(
+                min=0.0, max=50.0
+            ),
         }
     )
     .extend(cv.polling_component_schema("60s"))
@@ -39,3 +46,5 @@ async def to_code(config):
     await cg.register_component(var, config)
     await i2c.register_i2c_device(var, config)
     cg.add(var.set_samples(config[CONF_SAMPLES]))
+    cg.add(var.set_filter_window(config[CONF_FILTER_WINDOW]))
+    cg.add(var.set_delta_threshold(config[CONF_DELTA_THRESHOLD]))

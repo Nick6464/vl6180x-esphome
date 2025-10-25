@@ -29,6 +29,28 @@ bool VL6180XSensor::read_reg(uint16_t reg, uint8_t *val) {
   return true;
 }
 
+float VL6180XSensor::apply_filter(float new_value) {
+  // Add new value to the circular buffer
+  filter_buffer_.push_back(new_value);
+  
+  // Keep buffer size limited to filter window
+  if (filter_buffer_.size() > filter_window_) {
+    filter_buffer_.erase(filter_buffer_.begin());
+  }
+  
+  // Calculate moving average
+  float sum = 0.0;
+  for (float val : filter_buffer_) {
+    sum += val;
+  }
+  float filtered_value = sum / filter_buffer_.size();
+  
+  ESP_LOGV(TAG, "Filter: new=%.1f, filtered=%.1f, buffer_size=%d", 
+           new_value, filtered_value, filter_buffer_.size());
+  
+  return filtered_value;
+}
+
 void VL6180XSensor::setup() {
   ESP_LOGCONFIG(TAG, "Setting up VL6180X...");
   delay(100);
@@ -216,8 +238,31 @@ void VL6180XSensor::update() {
   
   if (valid_samples > 0) {
     float average = (float)sum / valid_samples;
-    ESP_LOGD(TAG, "Distance: %.0f mm (averaged from %d/%d samples)", average, valid_samples, samples_);
-    this->publish_state(average);
+    
+    // Apply moving average filter if configured
+    float filtered_value = average;
+    if (filter_window_ > 1) {
+      filtered_value = this->apply_filter(average);
+    }
+    
+    // Apply delta threshold check if configured
+    bool should_publish = true;
+    if (delta_threshold_ > 0.0 && !isnan(last_published_value_)) {
+      float delta = abs(filtered_value - last_published_value_);
+      if (delta < delta_threshold_) {
+        should_publish = false;
+        ESP_LOGV(TAG, "Suppressed update: delta %.1f mm < threshold %.1f mm", delta, delta_threshold_);
+      }
+    }
+    
+    if (should_publish) {
+      ESP_LOGD(TAG, "Distance: %.0f mm (raw: %.0f, from %d/%d samples)", 
+               filtered_value, average, valid_samples, samples_);
+      this->publish_state(filtered_value);
+      last_published_value_ = filtered_value;
+    } else {
+      ESP_LOGD(TAG, "Distance: %.0f mm (filtered, not published due to delta threshold)", filtered_value);
+    }
   } else {
     ESP_LOGW(TAG, "No valid measurements obtained");
   }
@@ -229,6 +274,8 @@ void VL6180XSensor::dump_config() {
   LOG_UPDATE_INTERVAL(this);
   LOG_SENSOR("  ", "Distance", this);
   ESP_LOGCONFIG(TAG, "  Samples: %d", samples_);
+  ESP_LOGCONFIG(TAG, "  Filter Window: %d", filter_window_);
+  ESP_LOGCONFIG(TAG, "  Delta Threshold: %.1f mm", delta_threshold_);
   if (this->is_failed()) {
     ESP_LOGE(TAG, "Communication with VL6180X failed!");
   }

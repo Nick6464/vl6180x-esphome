@@ -32,13 +32,19 @@ i2c:
   scan: true
   frequency: 100kHz  # Use 100kHz for more reliable communication (VL6180X supports up to 400kHz)
 
-# VL6180X sensor
+# VL6180X sensor with debouncing
+# Three-stage noise reduction:
+# 1. samples: Takes multiple hardware readings per update and averages them
+# 2. filter_window: Moving average over last N updates for smooth transitions
+# 3. delta_threshold: Suppress updates if change is below threshold
 sensor:
   - platform: vl6180x
     name: "ToF Distance"
     id: tof_distance
     update_interval: 2s
-    samples: 5  # Take 5 readings and average them to reduce noise
+    samples: 5  # Take 5 readings per update and average them
+    filter_window: 5  # Moving average over last 5 updates (debouncing)
+    delta_threshold: 2.0  # Only publish if change is >= 2mm (reduce noise)
     on_value:
       then:
         - logger.log:
