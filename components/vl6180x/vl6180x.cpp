@@ -58,6 +58,7 @@ void VL6180XSensor::setup() {
       ESP_LOGI(TAG, "Loading mandatory settings from AN4545...");
       
       // Mandatory private register settings from ST AN4545 application note
+      // These must be loaded exactly as specified in the datasheet
       this->write_reg(0x0207, 0x01);
       this->write_reg(0x0208, 0x01);
       this->write_reg(0x0096, 0x00);
@@ -92,13 +93,30 @@ void VL6180XSensor::setup() {
       // Clear fresh out of reset flag
       this->write_reg(0x0016, 0x00);
       ESP_LOGI(TAG, "Settings loaded successfully");
+      
+      // Allow time for settings to take effect
+      delay(10);
     }
   }
   
-  // Configure recommended settings
-  this->write_reg(0x001B, 0x31);  // Max convergence time
-  this->write_reg(0x003E, 0x31);  // Range check enables
-  this->write_reg(0x0014, 0x24);  // Averaging sample period
+  // Configure range measurement settings per datasheet recommendations
+  // READOUT__AVERAGING_SAMPLE_PERIOD (0x010A) - for improved accuracy
+  this->write_reg(0x010A, 0x30);  // Default is 0x30 (48 samples averaged)
+  
+  // SYSRANGE__MAX_CONVERGENCE_TIME (0x001C) - max time for measurement
+  this->write_reg(0x001C, 0x31);  // 49ms max convergence time (recommended for accuracy)
+  
+  // SYSRANGE__RANGE_CHECK_ENABLES (0x002D) - enable signal and ignore thresholds  
+  this->write_reg(0x002D, 0x11);  // Enable early convergence estimate check and SNR check
+  
+  // SYSRANGE__MAX_AMBIENT_LEVEL_MULT (0x002C) - ambient light threshold
+  this->write_reg(0x002C, 0xFF);  // Maximum tolerance to ambient light
+  
+  // SYSRANGE__INTERMEASUREMENT_PERIOD (0x001B) - time between ranging operations
+  this->write_reg(0x001B, 0x09);  // 100ms period for continuous mode (not used in single-shot)
+  
+  // Allow configuration to settle
+  delay(10);
   
   initialized_ = true;
   ESP_LOGCONFIG(TAG, "VL6180X setup complete");
@@ -116,42 +134,89 @@ void VL6180XSensor::update() {
   // Take multiple samples and average them
   for (uint8_t sample = 0; sample < samples_; sample++) {
     // Start single-shot range measurement
-    this->write_reg(0x0018, 0x01);
+    if (!this->write_reg(0x0018, 0x01)) {
+      ESP_LOGW(TAG, "Failed to start measurement");
+      continue;
+    }
     
-    // Poll interrupt status register for range ready
+    // Wait for measurement to start (per datasheet, typical 10ms)
+    delay(10);
+    
+    // Poll interrupt status register for range ready (max convergence time ~30ms)
     uint8_t status = 0;
     bool measurement_ready = false;
     
-    for (int i = 0; i < 100; i++) {
-      if (this->read_reg(0x004F, &status) && (status & 0x04)) {
-        // Range measurement ready
-        uint8_t range;
-        if (this->read_reg(0x0062, &range)) {
-          // Clear interrupt
-          this->write_reg(0x0015, 0x07);
+    for (int i = 0; i < 20; i++) {  // Reduced poll count, increased interval
+      if (this->read_reg(0x004F, &status)) {
+        if (status & 0x04) {
+          // Range measurement ready - check error status first
+          uint8_t error_status;
+          if (!this->read_reg(0x004D, &error_status)) {
+            ESP_LOGW(TAG, "Failed to read error status");
+            break;
+          }
           
-          sum += range;
-          valid_samples++;
+          // Check for valid measurement (error code in bits 7:4)
+          uint8_t error_code = (error_status >> 4) & 0x0F;
+          
+          if (error_code == 0x00) {  // No error - valid measurement
+            uint8_t range;
+            if (this->read_reg(0x0062, &range)) {
+              // Additional validation: VL6180X effective range is 0-200mm
+              if (range <= 200) {
+                sum += range;
+                valid_samples++;
+                measurement_ready = true;
+                ESP_LOGV(TAG, "Sample %d: %d mm (valid)", sample + 1, range);
+              } else {
+                ESP_LOGV(TAG, "Sample %d: %d mm (out of range)", sample + 1, range);
+              }
+            }
+          } else {
+            // Log specific error codes from datasheet
+            const char* error_msg = "Unknown";
+            switch (error_code) {
+              case 0x01: error_msg = "VCSEL Continuity Test"; break;
+              case 0x02: error_msg = "VCSEL Watchdog Test"; break;
+              case 0x03: error_msg = "VCSEL Watchdog"; break;
+              case 0x04: error_msg = "PLL1 Lock"; break;
+              case 0x05: error_msg = "PLL2 Lock"; break;
+              case 0x06: error_msg = "Early Convergence Estimate"; break;
+              case 0x07: error_msg = "Max Convergence"; break;
+              case 0x08: error_msg = "No Target Ignore"; break;
+              case 0x0B: error_msg = "Max Signal To Noise Ratio"; break;
+              case 0x0C: error_msg = "Raw Ranging Algo Underflow"; break;
+              case 0x0D: error_msg = "Raw Ranging Algo Overflow"; break;
+              case 0x0E: error_msg = "Ranging Algo Underflow"; break;
+              case 0x0F: error_msg = "Ranging Algo Overflow"; break;
+            }
+            ESP_LOGV(TAG, "Sample %d error: 0x%02X (%s)", sample + 1, error_code, error_msg);
+          }
+          
+          // Clear interrupt - must be done after reading results
+          this->write_reg(0x0015, 0x07);
           measurement_ready = true;
           break;
         }
       }
-      delay(2);
+      
+      // Wait between polls (per datasheet timing requirements)
+      delay(5);
     }
     
     if (!measurement_ready) {
       ESP_LOGW(TAG, "Sample %d measurement timeout (status: 0x%02X)", sample + 1, status);
     }
     
-    // Small delay between samples
+    // Inter-measurement delay to allow sensor to stabilize
     if (sample < samples_ - 1) {
-      delay(10);
+      delay(30);
     }
   }
   
   if (valid_samples > 0) {
     float average = (float)sum / valid_samples;
-    ESP_LOGD(TAG, "Distance: %.1f mm (averaged from %d/%d samples)", average, valid_samples, samples_);
+    ESP_LOGD(TAG, "Distance: %.0f mm (averaged from %d/%d samples)", average, valid_samples, samples_);
     this->publish_state(average);
   } else {
     ESP_LOGW(TAG, "No valid measurements obtained");

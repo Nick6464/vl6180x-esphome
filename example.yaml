@@ -30,7 +30,7 @@ i2c:
   sda: GPIO21
   scl: GPIO22
   scan: true
-  frequency: 400kHz
+  frequency: 100kHz  # Use 100kHz for more reliable communication (VL6180X supports up to 400kHz)
 
 # VL6180X sensor
 sensor:
