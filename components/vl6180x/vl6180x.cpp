@@ -1,10 +1,13 @@
 #include "vl6180x.h"
 #include "esphome/core/log.h"
+#include "esphome/core/hal.h"
+#include <cmath>
 
 namespace esphome {
 namespace vl6180x {
 
 static const char *const TAG = "vl6180x";
+static const char *const VERSION = "1.0.7-SETUP-REPORT";  // Version identifier
 
 bool VL6180XSensor::write_reg(uint16_t reg, uint8_t val) {
   uint8_t data[3] = {(uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF), val};
@@ -13,16 +16,14 @@ bool VL6180XSensor::write_reg(uint16_t reg, uint8_t val) {
     ESP_LOGE(TAG, "Write failed for reg 0x%04X", reg);
     return false;
   }
+  delay(1);
   return true;
 }
 
 bool VL6180XSensor::read_reg(uint16_t reg, uint8_t *val) {
   uint8_t addr[2] = {(uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF)};
-  if (this->write(addr, 2) != i2c::ERROR_OK) {
-    ESP_LOGE(TAG, "Write addr failed for reg 0x%04X", reg);
-    return false;
-  }
-  if (this->read(val, 1) != i2c::ERROR_OK) {
+  auto result = this->write_read(addr, 2, val, 1);
+  if (result != i2c::ERROR_OK) {
     ESP_LOGE(TAG, "Read failed for reg 0x%04X", reg);
     return false;
   }
@@ -52,8 +53,12 @@ float VL6180XSensor::apply_filter(float new_value) {
 }
 
 void VL6180XSensor::setup() {
-  ESP_LOGCONFIG(TAG, "Setting up VL6180X...");
-  delay(100);
+  setup_attempted_ = true;
+  ESP_LOGE(TAG, "!!! SETUP STARTING - VERSION %s !!!", VERSION);
+  ESP_LOGI(TAG, "=== VL6180X Setup Start (Version: %s) ===", VERSION);
+  ESP_LOGCONFIG(TAG, "Setting up VL6180X... (Library Version: %s)", VERSION);
+  delay(100);  // Use delay() instead of delayMicroseconds() for ESP-IDF compatibility
+  ESP_LOGE(TAG, "!!! SETUP: After 100ms delay !!!");
   
   // Check model ID (should be 0xB4)
   uint8_t model_id;
@@ -63,6 +68,7 @@ void VL6180XSensor::setup() {
     return;
   }
   
+  setup_model_id_ = model_id;
   ESP_LOGI(TAG, "Model ID: 0x%02X", model_id);
   
   if (model_id != 0xB4) {
@@ -73,52 +79,59 @@ void VL6180XSensor::setup() {
   
   // Check fresh out of reset flag
   uint8_t fresh;
-  if (this->read_reg(0x0016, &fresh)) {
-    ESP_LOGI(TAG, "Fresh reset status: 0x%02X", fresh);
+  if (!this->read_reg(0x0016, &fresh)) {
+    ESP_LOGE(TAG, "Failed to read fresh reset flag - communication issue");
+    this->mark_failed();
+    return;
+  }
+  
+  setup_fresh_flag_ = fresh;
+  ESP_LOGI(TAG, "Fresh reset status: 0x%02X", fresh);
+  
+  if (fresh == 1) {
+    ESP_LOGI(TAG, "Loading mandatory settings from AN4545...");
     
-    if (fresh == 1) {
-      ESP_LOGI(TAG, "Loading mandatory settings from AN4545...");
-      
-      // Mandatory private register settings from ST AN4545 application note
-      // These must be loaded exactly as specified in the datasheet
-      this->write_reg(0x0207, 0x01);
-      this->write_reg(0x0208, 0x01);
-      this->write_reg(0x0096, 0x00);
-      this->write_reg(0x0097, 0xFD);
-      this->write_reg(0x00E3, 0x00);
-      this->write_reg(0x00E4, 0x04);
-      this->write_reg(0x00E5, 0x02);
-      this->write_reg(0x00E6, 0x01);
-      this->write_reg(0x00E7, 0x03);
-      this->write_reg(0x00F5, 0x02);
-      this->write_reg(0x00D9, 0x05);
-      this->write_reg(0x00DB, 0xCE);
-      this->write_reg(0x00DC, 0x03);
-      this->write_reg(0x00DD, 0xF8);
-      this->write_reg(0x009F, 0x00);
-      this->write_reg(0x00A3, 0x3C);
-      this->write_reg(0x00B7, 0x00);
-      this->write_reg(0x00BB, 0x3C);
-      this->write_reg(0x00B2, 0x09);
-      this->write_reg(0x00CA, 0x09);
-      this->write_reg(0x0198, 0x01);
-      this->write_reg(0x01B0, 0x17);
-      this->write_reg(0x01AD, 0x00);
-      this->write_reg(0x00FF, 0x05);
-      this->write_reg(0x0100, 0x05);
-      this->write_reg(0x0199, 0x05);
-      this->write_reg(0x01A6, 0x1B);
-      this->write_reg(0x01AC, 0x3E);
-      this->write_reg(0x01A7, 0x1F);
-      this->write_reg(0x0030, 0x00);
-      
-      // Clear fresh out of reset flag
-      this->write_reg(0x0016, 0x00);
-      ESP_LOGI(TAG, "Settings loaded successfully");
-      
-      // Allow time for settings to take effect
-      delay(10);
-    }
+    // Mandatory private register settings from ST AN4545 application note
+    // These must be loaded exactly as specified in the datasheet
+    this->write_reg(0x0207, 0x01);
+    this->write_reg(0x0208, 0x01);
+    this->write_reg(0x0096, 0x00);
+    this->write_reg(0x0097, 0xFD);
+    this->write_reg(0x00E3, 0x00);
+    this->write_reg(0x00E4, 0x04);
+    this->write_reg(0x00E5, 0x02);
+    this->write_reg(0x00E6, 0x01);
+    this->write_reg(0x00E7, 0x03);
+    this->write_reg(0x00F5, 0x02);
+    this->write_reg(0x00D9, 0x05);
+    this->write_reg(0x00DB, 0xCE);
+    this->write_reg(0x00DC, 0x03);
+    this->write_reg(0x00DD, 0xF8);
+    this->write_reg(0x009F, 0x00);
+    this->write_reg(0x00A3, 0x3C);
+    this->write_reg(0x00B7, 0x00);
+    this->write_reg(0x00BB, 0x3C);
+    this->write_reg(0x00B2, 0x09);
+    this->write_reg(0x00CA, 0x09);
+    this->write_reg(0x0198, 0x01);
+    this->write_reg(0x01B0, 0x17);
+    this->write_reg(0x01AD, 0x00);
+    this->write_reg(0x00FF, 0x05);
+    this->write_reg(0x0100, 0x05);
+    this->write_reg(0x0199, 0x05);
+    this->write_reg(0x01A6, 0x1B);
+    this->write_reg(0x01AC, 0x3E);
+    this->write_reg(0x01A7, 0x1F);
+    this->write_reg(0x0030, 0x00);
+    
+    // Clear fresh out of reset flag
+    this->write_reg(0x0016, 0x00);
+    ESP_LOGI(TAG, "Settings loaded successfully");
+    
+    // Allow time for settings to take effect
+    delay(10);  // Use delay() instead of delayMicroseconds() for ESP-IDF compatibility
+  } else {
+    ESP_LOGI(TAG, "Sensor already initialized (fresh flag = 0x%02X)", fresh);
   }
   
   // Configure range measurement settings per datasheet recommendations
@@ -138,15 +151,41 @@ void VL6180XSensor::setup() {
   this->write_reg(0x001B, 0x09);  // 100ms period for continuous mode (not used in single-shot)
   
   // Allow configuration to settle
-  delay(10);
+  delay(10);  // Use delay() instead of delayMicroseconds() for ESP-IDF compatibility
+  
+  // Verify sensor is responding by reading back a configuration register
+  uint8_t verify;
+  if (this->read_reg(0x001C, &verify)) {
+    ESP_LOGI(TAG, "Verification: MAX_CONVERGENCE_TIME = 0x%02X (expected 0x31)", verify);
+  } else {
+    ESP_LOGW(TAG, "Failed to verify sensor configuration");
+  }
   
   initialized_ = true;
+  setup_succeeded_ = true;
+  ESP_LOGE(TAG, "!!! SETUP COMPLETE - INITIALIZED = TRUE !!!");
   ESP_LOGCONFIG(TAG, "VL6180X setup complete");
 }
 
 void VL6180XSensor::update() {
+  // Log setup status on first update call (visible after WiFi connects)
+  static bool first_update = true;
+  if (first_update) {
+    first_update = false;
+    ESP_LOGE(TAG, "========================================");
+    ESP_LOGE(TAG, "FIRST UPDATE - SETUP REPORT (WiFi connected now)");
+    ESP_LOGE(TAG, "Version: %s", VERSION);
+    ESP_LOGE(TAG, "Setup Attempted: %s", setup_attempted_ ? "YES" : "NO");
+    ESP_LOGE(TAG, "Setup Succeeded: %s", setup_succeeded_ ? "YES" : "NO");
+    ESP_LOGE(TAG, "Model ID Read: 0x%02X (expected 0xB4)", setup_model_id_);
+    ESP_LOGE(TAG, "Fresh Flag: 0x%02X (0x01=needs init, 0x00=already init)", setup_fresh_flag_);
+    ESP_LOGE(TAG, "Initialized: %s", initialized_ ? "TRUE" : "FALSE");
+    ESP_LOGE(TAG, "Component Failed: %s", this->is_failed() ? "YES" : "NO");
+    ESP_LOGE(TAG, "========================================");
+  }
+  
   if (!initialized_) {
-    ESP_LOGW(TAG, "Sensor not initialized");
+    ESP_LOGW(TAG, "Sensor not initialized (setup may have failed)");
     return;
   }
   
@@ -155,22 +194,60 @@ void VL6180XSensor::update() {
   
   // Take multiple samples and average them
   for (uint8_t sample = 0; sample < samples_; sample++) {
-    // Start single-shot range measurement
-    if (!this->write_reg(0x0018, 0x01)) {
-      ESP_LOGW(TAG, "Failed to start measurement");
+    // Clear any previous interrupt flags before starting
+    if (!this->write_reg(0x0015, 0x07)) {
+      ESP_LOGW(TAG, "Failed to clear interrupts");
       continue;
     }
     
-    // Wait for measurement to start (per datasheet, typical 10ms)
-    delay(10);
+    // Verify system is ready for new measurement
+    uint8_t sys_ready;
+    if (this->read_reg(0x004F, &sys_ready)) {
+      ESP_LOGD(TAG, "Before start - status: 0x%02X", sys_ready);
+    }
     
-    // Poll interrupt status register for range ready (max convergence time ~30ms)
+    // Start single-shot range measurement - with retry logic for ESP-IDF
+    bool start_success = false;
+    for (int retry = 0; retry < 3; retry++) {
+      if (!this->write_reg(0x0018, 0x01)) {
+        ESP_LOGW(TAG, "Failed to write start command (attempt %d)", retry + 1);
+        delay(5);
+        continue;
+      }
+      
+      // Give ESP-IDF I2C time to complete the transaction
+      delay(5);
+      
+      // Verify command was accepted
+      uint8_t start_confirm;
+      if (this->read_reg(0x0018, &start_confirm)) {
+        ESP_LOGD(TAG, "Sample %d attempt %d: Start register = 0x%02X", sample + 1, retry + 1, start_confirm);
+        if (start_confirm == 0x01) {
+          start_success = true;
+          break;
+        }
+      }
+      delay(5);
+    }
+    
+    if (!start_success) {
+      ESP_LOGW(TAG, "Sample %d: Failed to start measurement after 3 attempts", sample + 1);
+      continue;
+    }
+    
+    ESP_LOGD(TAG, "Sample %d: Measurement started successfully!", sample + 1);
+    
+    delay(60);  // Increased for ESP-IDF - sensor needs time to complete ranging 
+    
     uint8_t status = 0;
     bool measurement_ready = false;
     
-    for (int i = 0; i < 20; i++) {  // Reduced poll count, increased interval
+    for (int i = 0; i < 30; i++) { 
       if (this->read_reg(0x004F, &status)) {
+        ESP_LOGD(TAG, "Poll %d: status=0x%02X (bit2=%d, bit1=%d, bit0=%d)", 
+                 i, status, (status >> 2) & 1, (status >> 1) & 1, status & 1);
         if (status & 0x04) {
+          ESP_LOGD(TAG, "Measurement ready detected!");
           // Range measurement ready - check error status first
           uint8_t error_status;
           if (!this->read_reg(0x004D, &error_status)) {
@@ -223,7 +300,7 @@ void VL6180XSensor::update() {
       }
       
       // Wait between polls (per datasheet timing requirements)
-      delay(5);
+      delay(5);  // Use delay() instead of delayMicroseconds() for ESP-IDF compatibility
     }
     
     if (!measurement_ready) {
@@ -232,7 +309,7 @@ void VL6180XSensor::update() {
     
     // Inter-measurement delay to allow sensor to stabilize
     if (sample < samples_ - 1) {
-      delay(30);
+      delay(30);  // Use delay() instead of delayMicroseconds() for ESP-IDF compatibility
     }
   }
   
@@ -247,7 +324,7 @@ void VL6180XSensor::update() {
     
     // Apply delta threshold check if configured
     bool should_publish = true;
-    if (delta_threshold_ > 0.0 && !isnan(last_published_value_)) {
+    if (delta_threshold_ > 0.0 && !std::isnan(last_published_value_)) {
       float delta = abs(filtered_value - last_published_value_);
       if (delta < delta_threshold_) {
         should_publish = false;
@@ -270,6 +347,7 @@ void VL6180XSensor::update() {
 
 void VL6180XSensor::dump_config() {
   ESP_LOGCONFIG(TAG, "VL6180X Time-of-Flight Distance Sensor:");
+  ESP_LOGCONFIG(TAG, "  Library Version: %s", VERSION);
   LOG_I2C_DEVICE(this);
   LOG_UPDATE_INTERVAL(this);
   LOG_SENSOR("  ", "Distance", this);
