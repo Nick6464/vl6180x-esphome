@@ -7,7 +7,7 @@ namespace esphome {
 namespace vl6180x {
 
 static const char *const TAG = "vl6180x";
-static const char *const VERSION = "1.0.7-SETUP-REPORT";  // Version identifier
+static const char *const VERSION = "1.0.7";
 
 bool VL6180XSensor::write_reg(uint16_t reg, uint8_t val) {
   uint8_t data[3] = {(uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF), val};
@@ -44,21 +44,13 @@ float VL6180XSensor::apply_filter(float new_value) {
   for (float val : filter_buffer_) {
     sum += val;
   }
-  float filtered_value = sum / filter_buffer_.size();
-  
-  ESP_LOGV(TAG, "Filter: new=%.1f, filtered=%.1f, buffer_size=%d", 
-           new_value, filtered_value, filter_buffer_.size());
-  
-  return filtered_value;
+  return sum / filter_buffer_.size();
 }
 
 void VL6180XSensor::setup() {
-  setup_attempted_ = true;
-  ESP_LOGE(TAG, "!!! SETUP STARTING - VERSION %s !!!", VERSION);
-  ESP_LOGI(TAG, "=== VL6180X Setup Start (Version: %s) ===", VERSION);
-  ESP_LOGCONFIG(TAG, "Setting up VL6180X... (Library Version: %s)", VERSION);
-  delay(100);  // Use delay() instead of delayMicroseconds() for ESP-IDF compatibility
-  ESP_LOGE(TAG, "!!! SETUP: After 100ms delay !!!");
+  ESP_LOGCONFIG(TAG, "Setting up VL6180X...");
+  delay(100);
+  yield();
   
   // Check model ID (should be 0xB4)
   uint8_t model_id;
@@ -68,81 +60,89 @@ void VL6180XSensor::setup() {
     return;
   }
   
-  setup_model_id_ = model_id;
-  ESP_LOGI(TAG, "Model ID: 0x%02X", model_id);
-  
   if (model_id != 0xB4) {
     ESP_LOGE(TAG, "Wrong model ID! Expected 0xB4, got 0x%02X", model_id);
     this->mark_failed();
     return;
   }
   
+  ESP_LOGCONFIG(TAG, "VL6180X detected, model ID: 0x%02X", model_id);
+  
   // Check fresh out of reset flag
   uint8_t fresh;
   if (!this->read_reg(0x0016, &fresh)) {
-    ESP_LOGE(TAG, "Failed to read fresh reset flag - communication issue");
+    ESP_LOGE(TAG, "Failed to read fresh reset flag");
     this->mark_failed();
     return;
   }
   
-  setup_fresh_flag_ = fresh;
-  ESP_LOGI(TAG, "Fresh reset status: 0x%02X", fresh);
+  ESP_LOGCONFIG(TAG, "Fresh out of reset flag: %d", fresh);
   
-  if (fresh == 1) {
-    ESP_LOGI(TAG, "Loading mandatory settings from AN4545...");
-    
-    // Mandatory private register settings from ST AN4545 application note
-    // These must be loaded exactly as specified in the datasheet
-    this->write_reg(0x0207, 0x01);
-    this->write_reg(0x0208, 0x01);
-    this->write_reg(0x0096, 0x00);
-    this->write_reg(0x0097, 0xFD);
-    this->write_reg(0x00E3, 0x00);
-    this->write_reg(0x00E4, 0x04);
-    this->write_reg(0x00E5, 0x02);
-    this->write_reg(0x00E6, 0x01);
-    this->write_reg(0x00E7, 0x03);
-    this->write_reg(0x00F5, 0x02);
-    this->write_reg(0x00D9, 0x05);
-    this->write_reg(0x00DB, 0xCE);
-    this->write_reg(0x00DC, 0x03);
-    this->write_reg(0x00DD, 0xF8);
-    this->write_reg(0x009F, 0x00);
-    this->write_reg(0x00A3, 0x3C);
-    this->write_reg(0x00B7, 0x00);
-    this->write_reg(0x00BB, 0x3C);
-    this->write_reg(0x00B2, 0x09);
-    this->write_reg(0x00CA, 0x09);
-    this->write_reg(0x0198, 0x01);
-    this->write_reg(0x01B0, 0x17);
-    this->write_reg(0x01AD, 0x00);
-    this->write_reg(0x00FF, 0x05);
-    this->write_reg(0x0100, 0x05);
-    this->write_reg(0x0199, 0x05);
-    this->write_reg(0x01A6, 0x1B);
-    this->write_reg(0x01AC, 0x3E);
-    this->write_reg(0x01A7, 0x1F);
-    this->write_reg(0x0030, 0x00);
-    
-    // Clear fresh out of reset flag
-    this->write_reg(0x0016, 0x00);
-    ESP_LOGI(TAG, "Settings loaded successfully");
-    
-    // Allow time for settings to take effect
-    delay(10);  // Use delay() instead of delayMicroseconds() for ESP-IDF compatibility
-  } else {
-    ESP_LOGI(TAG, "Sensor already initialized (fresh flag = 0x%02X)", fresh);
-  }
+  // Always load mandatory settings (not just when fresh == 1)
+  // This ensures proper initialization even if ESP reboots but sensor doesn't
+  ESP_LOGCONFIG(TAG, "Loading mandatory settings...");
+  yield();
+  
+  // Mandatory private register settings from ST AN4545 application note
+  // These must be loaded exactly as specified in the datasheet
+  this->write_reg(0x0207, 0x01);
+  this->write_reg(0x0208, 0x01);
+  this->write_reg(0x0096, 0x00);
+  this->write_reg(0x0097, 0xFD);
+  this->write_reg(0x00E3, 0x00);
+  this->write_reg(0x00E4, 0x04);
+  this->write_reg(0x00E5, 0x02);
+  this->write_reg(0x00E6, 0x01);
+  this->write_reg(0x00E7, 0x03);
+  this->write_reg(0x00F5, 0x02);
+  yield();
+  this->write_reg(0x00D9, 0x05);
+  this->write_reg(0x00DB, 0xCE);
+  this->write_reg(0x00DC, 0x03);
+  this->write_reg(0x00DD, 0xF8);
+  this->write_reg(0x009F, 0x00);
+  this->write_reg(0x00A3, 0x3C);
+  this->write_reg(0x00B7, 0x00);
+  this->write_reg(0x00BB, 0x3C);
+  this->write_reg(0x00B2, 0x09);
+  this->write_reg(0x00CA, 0x09);
+  yield();
+  this->write_reg(0x0198, 0x01);
+  this->write_reg(0x01B0, 0x17);
+  this->write_reg(0x01AD, 0x00);
+  this->write_reg(0x00FF, 0x05);
+  this->write_reg(0x0100, 0x05);
+  this->write_reg(0x0199, 0x05);
+  this->write_reg(0x01A6, 0x1B);
+  this->write_reg(0x01AC, 0x3E);
+  this->write_reg(0x01A7, 0x1F);
+  this->write_reg(0x0030, 0x00);
+  yield();
+  
+  // Clear fresh out of reset flag
+  this->write_reg(0x0016, 0x00);
+  
+  // Allow time for settings to take effect
+  delay(10);
+  
+  ESP_LOGCONFIG(TAG, "Configuring range measurement settings...");
+  yield();
   
   // Configure range measurement settings per datasheet recommendations
   // READOUT__AVERAGING_SAMPLE_PERIOD (0x010A) - for improved accuracy
   this->write_reg(0x010A, 0x30);  // Default is 0x30 (48 samples averaged)
   
+  // SYSRANGE__VHV_RECALIBRATE (0x002E) - Enable VHV recalibration
+  this->write_reg(0x002E, 0x01);
+  
+  // SYSRANGE__VHV_REPEAT_RATE (0x0031) - Set VHV repeat rate
+  this->write_reg(0x0031, 0xFF);
+  
   // SYSRANGE__MAX_CONVERGENCE_TIME (0x001C) - max time for measurement
-  this->write_reg(0x001C, 0x31);  // 49ms max convergence time (recommended for accuracy)
+  this->write_reg(0x001C, 0x32);  // 50ms max convergence time
   
   // SYSRANGE__RANGE_CHECK_ENABLES (0x002D) - enable signal and ignore thresholds  
-  this->write_reg(0x002D, 0x11);  // Enable early convergence estimate check and SNR check
+  this->write_reg(0x002D, 0x10);  // Enable SNR check only (bit 4)
   
   // SYSRANGE__MAX_AMBIENT_LEVEL_MULT (0x002C) - ambient light threshold
   this->write_reg(0x002C, 0xFF);  // Maximum tolerance to ambient light
@@ -150,166 +150,143 @@ void VL6180XSensor::setup() {
   // SYSRANGE__INTERMEASUREMENT_PERIOD (0x001B) - time between ranging operations
   this->write_reg(0x001B, 0x09);  // 100ms period for continuous mode (not used in single-shot)
   
-  // Allow configuration to settle
-  delay(10);  // Use delay() instead of delayMicroseconds() for ESP-IDF compatibility
+  // SYSTEM__MODE_GPIO1 (0x0011) - Configure GPIO1 as output (not using interrupts for now)
+  this->write_reg(0x0011, 0x10);  // GPIO1 = disabled
   
-  // Verify sensor is responding by reading back a configuration register
-  uint8_t verify;
-  if (this->read_reg(0x001C, &verify)) {
-    ESP_LOGI(TAG, "Verification: MAX_CONVERGENCE_TIME = 0x%02X (expected 0x31)", verify);
-  } else {
-    ESP_LOGW(TAG, "Failed to verify sensor configuration");
+  // SYSTEM__INTERRUPT_CONFIG_GPIO (0x0014) - Configure interrupt behavior
+  this->write_reg(0x0014, 0x24);  // Disable all interrupt sources initially
+  
+  // SYSTEM__GROUPED_PARAMETER_HOLD (0x0017) - Don't hold parameters during updates
+  this->write_reg(0x0017, 0x00);
+  
+  // Allow configuration to settle
+  delay(10);
+  
+  // Clear any stale measurements and interrupts
+  ESP_LOGCONFIG(TAG, "Clearing stale data...");
+  this->write_reg(0x0015, 0x07);  // Clear all interrupts
+  delay(10);
+  
+  // Read and discard any stale measurement
+  uint8_t stale_status;
+  if (this->read_reg(0x004F, &stale_status)) {
+    if (stale_status & 0x04) {
+      uint8_t discard;
+      this->read_reg(0x0062, &discard);  // Read and discard stale range
+      this->write_reg(0x0015, 0x07);      // Clear interrupt again
+      ESP_LOGCONFIG(TAG, "Cleared stale measurement data");
+    }
+  }
+  
+  // Do a test read of critical registers
+  uint8_t test_val;
+  if (this->read_reg(0x001C, &test_val)) {
+    ESP_LOGCONFIG(TAG, "SYSRANGE__MAX_CONVERGENCE_TIME: 0x%02X", test_val);
+  }
+  if (this->read_reg(0x0018, &test_val)) {
+    ESP_LOGCONFIG(TAG, "SYSRANGE__START (should be 0x00): 0x%02X", test_val);
   }
   
   initialized_ = true;
-  setup_succeeded_ = true;
-  ESP_LOGE(TAG, "!!! SETUP COMPLETE - INITIALIZED = TRUE !!!");
   ESP_LOGCONFIG(TAG, "VL6180X setup complete");
 }
 
 void VL6180XSensor::update() {
-  // Log setup status on first update call (visible after WiFi connects)
-  static bool first_update = true;
-  if (first_update) {
-    first_update = false;
-    ESP_LOGE(TAG, "========================================");
-    ESP_LOGE(TAG, "FIRST UPDATE - SETUP REPORT (WiFi connected now)");
-    ESP_LOGE(TAG, "Version: %s", VERSION);
-    ESP_LOGE(TAG, "Setup Attempted: %s", setup_attempted_ ? "YES" : "NO");
-    ESP_LOGE(TAG, "Setup Succeeded: %s", setup_succeeded_ ? "YES" : "NO");
-    ESP_LOGE(TAG, "Model ID Read: 0x%02X (expected 0xB4)", setup_model_id_);
-    ESP_LOGE(TAG, "Fresh Flag: 0x%02X (0x01=needs init, 0x00=already init)", setup_fresh_flag_);
-    ESP_LOGE(TAG, "Initialized: %s", initialized_ ? "TRUE" : "FALSE");
-    ESP_LOGE(TAG, "Component Failed: %s", this->is_failed() ? "YES" : "NO");
-    ESP_LOGE(TAG, "========================================");
-  }
-  
   if (!initialized_) {
-    ESP_LOGW(TAG, "Sensor not initialized (setup may have failed)");
+    ESP_LOGW(TAG, "Sensor not initialized");
     return;
   }
   
   uint32_t sum = 0;
   uint8_t valid_samples = 0;
+  uint32_t start_time = millis();
   
   // Take multiple samples and average them
   for (uint8_t sample = 0; sample < samples_; sample++) {
+    // Timeout check - abort if taking too long (prevent watchdog timeout)
+    if (millis() - start_time > 500) {
+      ESP_LOGV(TAG, "Update timeout after 500ms, got %d/%d samples", valid_samples, samples_);
+      break;
+    }
+    
+    // Yield to prevent watchdog timeout
+    yield();
+    
     // Clear any previous interrupt flags before starting
     if (!this->write_reg(0x0015, 0x07)) {
-      ESP_LOGW(TAG, "Failed to clear interrupts");
+      ESP_LOGV(TAG, "Failed to clear interrupt");
       continue;
     }
     
-    // Verify system is ready for new measurement
-    uint8_t sys_ready;
-    if (this->read_reg(0x004F, &sys_ready)) {
-      ESP_LOGD(TAG, "Before start - status: 0x%02X", sys_ready);
-    }
+    // Small delay to allow interrupt clear to process
+    delay(5);
     
-    // Start single-shot range measurement - with retry logic for ESP-IDF
-    bool start_success = false;
-    for (int retry = 0; retry < 3; retry++) {
-      if (!this->write_reg(0x0018, 0x01)) {
-        ESP_LOGW(TAG, "Failed to write start command (attempt %d)", retry + 1);
-        delay(5);
-        continue;
-      }
-      
-      // Give ESP-IDF I2C time to complete the transaction
-      delay(5);
-      
-      // Verify command was accepted
-      uint8_t start_confirm;
-      if (this->read_reg(0x0018, &start_confirm)) {
-        ESP_LOGD(TAG, "Sample %d attempt %d: Start register = 0x%02X", sample + 1, retry + 1, start_confirm);
-        if (start_confirm == 0x01) {
-          start_success = true;
-          break;
-        }
-      }
-      delay(5);
-    }
-    
-    if (!start_success) {
-      ESP_LOGW(TAG, "Sample %d: Failed to start measurement after 3 attempts", sample + 1);
+    // Start single-shot range measurement (mode 0x01 = single-shot)
+    if (!this->write_reg(0x0018, 0x01)) {
+      ESP_LOGV(TAG, "Failed to write start command");
       continue;
     }
     
-    ESP_LOGD(TAG, "Sample %d: Measurement started successfully!", sample + 1);
-    
-    delay(60);  // Increased for ESP-IDF - sensor needs time to complete ranging 
-    
+    // Wait for measurement to complete (typically takes ~30-50ms)
+    // Maximum 50 iterations = 100ms timeout per sample
     uint8_t status = 0;
-    bool measurement_ready = false;
+    bool got_measurement = false;
     
-    for (int i = 0; i < 30; i++) { 
-      if (this->read_reg(0x004F, &status)) {
-        ESP_LOGD(TAG, "Poll %d: status=0x%02X (bit2=%d, bit1=%d, bit0=%d)", 
-                 i, status, (status >> 2) & 1, (status >> 1) & 1, status & 1);
-        if (status & 0x04) {
-          ESP_LOGD(TAG, "Measurement ready detected!");
-          // Range measurement ready - check error status first
-          uint8_t error_status;
-          if (!this->read_reg(0x004D, &error_status)) {
-            ESP_LOGW(TAG, "Failed to read error status");
-            break;
-          }
-          
-          // Check for valid measurement (error code in bits 7:4)
-          uint8_t error_code = (error_status >> 4) & 0x0F;
-          
-          if (error_code == 0x00) {  // No error - valid measurement
-            uint8_t range;
-            if (this->read_reg(0x0062, &range)) {
-              // Additional validation: VL6180X effective range is 0-200mm
-              if (range <= 200) {
-                sum += range;
-                valid_samples++;
-                measurement_ready = true;
-                ESP_LOGV(TAG, "Sample %d: %d mm (valid)", sample + 1, range);
-              } else {
-                ESP_LOGV(TAG, "Sample %d: %d mm (out of range)", sample + 1, range);
-              }
-            }
-          } else {
-            // Log specific error codes from datasheet
-            const char* error_msg = "Unknown";
-            switch (error_code) {
-              case 0x01: error_msg = "VCSEL Continuity Test"; break;
-              case 0x02: error_msg = "VCSEL Watchdog Test"; break;
-              case 0x03: error_msg = "VCSEL Watchdog"; break;
-              case 0x04: error_msg = "PLL1 Lock"; break;
-              case 0x05: error_msg = "PLL2 Lock"; break;
-              case 0x06: error_msg = "Early Convergence Estimate"; break;
-              case 0x07: error_msg = "Max Convergence"; break;
-              case 0x08: error_msg = "No Target Ignore"; break;
-              case 0x0B: error_msg = "Max Signal To Noise Ratio"; break;
-              case 0x0C: error_msg = "Raw Ranging Algo Underflow"; break;
-              case 0x0D: error_msg = "Raw Ranging Algo Overflow"; break;
-              case 0x0E: error_msg = "Ranging Algo Underflow"; break;
-              case 0x0F: error_msg = "Ranging Algo Overflow"; break;
-            }
-            ESP_LOGV(TAG, "Sample %d error: 0x%02X (%s)", sample + 1, error_code, error_msg);
-          }
-          
-          // Clear interrupt - must be done after reading results
-          this->write_reg(0x0015, 0x07);
-          measurement_ready = true;
-          break;
-        }
+    for (int i = 0; i < 50; i++) {
+      yield(); // Yield every iteration to be safe
+      
+      if (!this->read_reg(0x004F, &status)) {
+        ESP_LOGW(TAG, "Failed to read status register");
+        break; // I2C error, abort this sample
       }
       
-      // Wait between polls (per datasheet timing requirements)
-      delay(5);  // Use delay() instead of delayMicroseconds() for ESP-IDF compatibility
+      // Log status occasionally at VERBOSE level for debugging
+      if (sample == 0 && i == 0) {
+        ESP_LOGVV(TAG, "Initial status: 0x%02X", status);
+      }
+      
+      if (status & 0x04) {
+        // Measurement ready
+        uint8_t error_status;
+        if (!this->read_reg(0x004D, &error_status)) {
+          ESP_LOGW(TAG, "Failed to read error status");
+          break;
+        }
+        
+        uint8_t error_code = (error_status >> 4) & 0x0F;
+        
+        if (error_code == 0x00) {
+          // Valid measurement
+          uint8_t range;
+          if (this->read_reg(0x0062, &range)) {
+            if (range <= 200) {
+              sum += range;
+              valid_samples++;
+              got_measurement = true;
+              ESP_LOGV(TAG, "Sample %d: %d mm", sample, range);
+            } else {
+              ESP_LOGV(TAG, "Sample %d out of range: %d mm", sample, range);
+            }
+          }
+        } else {
+          ESP_LOGW(TAG, "Sample %d error code: 0x%X", sample, error_code);
+        }
+        
+        // Clear interrupt
+        this->write_reg(0x0015, 0x07);
+        break;
+      }
+      
+      delay(2);
     }
     
-    if (!measurement_ready) {
-      ESP_LOGW(TAG, "Sample %d measurement timeout (status: 0x%02X)", sample + 1, status);
+    if (!got_measurement) {
+      ESP_LOGW(TAG, "Sample %d timeout (final status: 0x%02X)", sample, status);
     }
     
-    // Inter-measurement delay to allow sensor to stabilize
+    // Brief inter-measurement delay
     if (sample < samples_ - 1) {
-      delay(30);  // Use delay() instead of delayMicroseconds() for ESP-IDF compatibility
+      delay(5);
     }
   }
   
@@ -328,20 +305,15 @@ void VL6180XSensor::update() {
       float delta = abs(filtered_value - last_published_value_);
       if (delta < delta_threshold_) {
         should_publish = false;
-        ESP_LOGV(TAG, "Suppressed update: delta %.1f mm < threshold %.1f mm", delta, delta_threshold_);
       }
     }
     
     if (should_publish) {
-      ESP_LOGD(TAG, "Distance: %.0f mm (raw: %.0f, from %d/%d samples)", 
-               filtered_value, average, valid_samples, samples_);
       this->publish_state(filtered_value);
       last_published_value_ = filtered_value;
-    } else {
-      ESP_LOGD(TAG, "Distance: %.0f mm (filtered, not published due to delta threshold)", filtered_value);
     }
   } else {
-    ESP_LOGW(TAG, "No valid measurements obtained");
+    ESP_LOGW(TAG, "No valid measurements");
   }
 }
 

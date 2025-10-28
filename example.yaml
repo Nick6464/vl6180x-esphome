@@ -32,39 +32,49 @@ i2c:
   scan: true
   frequency: 100kHz  # Use 100kHz for more reliable communication (VL6180X supports up to 400kHz)
 
-# VL6180X sensor with debouncing
-# Three-stage noise reduction:
-# 1. samples: Takes multiple hardware readings per update and averages them
-# 2. filter_window: Moving average over last N updates for smooth transitions
-# 3. delta_threshold: Suppress updates if change is below threshold
+# VL6180X sensor with three-stage noise reduction
+# 
+# Stage 1 - Hardware sampling:
+#   samples: Number of sensor readings to average per update (each takes ~100ms)
+#   Recommended: 1-3 (stay under 5 to avoid 500ms watchdog timeout)
+#
+# Stage 2 - Moving average filter:
+#   filter_window: Smooths readings over multiple updates
+#   Larger values = smoother but slower response to real changes
+#
+# Stage 3 - Delta threshold:
+#   delta_threshold: Minimum change (mm) required to publish an update
+#   Prevents publishing tiny fluctuations and noise
 sensor:
   - platform: vl6180x
     name: "ToF Distance"
     id: tof_distance
     update_interval: 2s
-    samples: 5  # Take 5 readings per update and average them
-    filter_window: 5  # Moving average over last 5 updates (debouncing)
-    delta_threshold: 2.0  # Only publish if change is >= 2mm (reduce noise)
+    samples: 3           # Take 3 readings per update (~300ms total)
+    filter_window: 5     # Moving average over last 5 updates
+    delta_threshold: 5.0 # Only publish if change >= 5mm
     on_value:
       then:
         - logger.log:
             format: "Distance: %.1f mm"
             args: ['x']
 
-# Example: Convert to water level percentage
+# Example: Convert distance to water level percentage
+# Assumes sensor mounted above water, measuring distance to surface
+# Closer distance = higher water level (tank more full)
   - platform: template
     name: "Water Level Percentage"
     unit_of_measurement: "%"
     accuracy_decimals: 0
     lambda: |-
-      // Assume sensor at 200mm from empty, 50mm from full
-      float max_distance = 200.0;  // Empty level
-      float min_distance = 50.0;   // Full level
+      // Configure your tank dimensions:
+      float max_distance = 200.0;  // Distance when tank is empty (mm)
+      float min_distance = 50.0;   // Distance when tank is full (mm)
       float current = id(tof_distance).state;
       
       if (isnan(current)) return {};
       
-      // Calculate percentage (inverted - closer = more full)
+      // Calculate percentage (inverted - closer distance = more full)
       float percent = 100.0 - ((current - min_distance) / (max_distance - min_distance) * 100.0);
       
       // Clamp to 0-100%

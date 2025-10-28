@@ -31,12 +31,6 @@ class VL6180XSensor : public sensor::Sensor, public PollingComponent, public i2c
   
   std::vector<float> filter_buffer_;
   float last_published_value_{NAN};
-  
-  // Setup tracking (for WiFi-only logging)
-  bool setup_attempted_{false};
-  uint8_t setup_model_id_{0};
-  uint8_t setup_fresh_flag_{0};
-  bool setup_succeeded_{false};
 };
 
 }  // namespace vl6180x
